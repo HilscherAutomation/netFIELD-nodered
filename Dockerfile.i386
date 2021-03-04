@@ -1,0 +1,105 @@
+#use AMD compatible base image
+FROM debian:buster-20210111
+
+#dynamic build arguments coming from the /hooks/build file
+ARG BUILD_DATE
+ARG VCS_REF
+
+#metadata labels
+LABEL org.label-schema.build-date=$BUILD_DATE \
+      org.label-schema.vcs-url="https://github.com/HilscherAutomation/netFIELD-nodered" \
+      org.label-schema.vcs-ref=$VCS_REF
+
+#version
+ENV HILSCHERNETFIELD_NODERED_VERSION 1.0.0
+
+#labeling
+LABEL maintainer="netiotedge@hilscher.com" \
+      version=$HILSCHERNETFIELD_NODERED_VERSION \
+      description="Node-RED with several useful common Node-RED nodes" \
+      tag=$IMAGE_TAG
+
+# -------------------- Install nodejs and Node-RED --------------------------------------
+#install node.js V12.x.x and Node-RED 1.x.x
+RUN apt-get update && apt-get -y install curl sudo build-essential python-dev python-pip python-setuptools git \
+ && apt-get -y install bluetooth rfkill bluez bluez-tools pulseaudio-module-bluetooth \
+ && curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -  \
+ && apt-get -y install nodejs \
+ && npm install -g --unsafe-perm node-red@1.2.9 \
+ && npm config set package-lock false \
+#enable https security and make certificates known
+ && sed -i -e "s+//  key: require(\"fs\").readFileSync('privkey.pem'),+https: {\n    key: require(\"fs\").readFileSync('/root/.node-red/certs/node-key.pem'),+" /usr/lib/node_modules/node-red/settings.js \
+ && sed -i -e "s+//  cert: require(\"fs\").readFileSync('cert.pem')+cert: require(\"fs\").readFileSync('/root/.node-red/certs/node-cert.pem')\n    },+" /usr/lib/node_modules/node-red/settings.js \
+ && sed -i -e "s+//requireHttps: true,+requireHttps: true,+" /usr/lib/node_modules/node-red/settings.js \
+ && mkdir -p /root/.node-red/node_modules \
+ && cd /root/.node-red \
+#generate default Node-RED package.json file manually
+ && echo '{' > package.json \
+ && echo '  "name": "node-red-project",' >> package.json \
+ && echo '  "description": "A Node-RED Project",' >> package.json \
+ && echo '  "version": "0.0.1",' >> package.json \
+ && echo '  "private": true,' >> package.json \
+ && echo '  "dependencies": {' >> package.json \
+ && echo '  }' >> package.json \
+ && echo '}' >> package.json \
+#generate keys and self-signed certificate
+ && npm install when request \
+ && mkdir -p /root/.node-red/certs \
+ && cd /root/.node-red/certs \
+ && openssl genrsa -out ./node-key.pem 2048 \
+ && openssl req -new -sha256 -key ./node-key.pem -out ./node-csr.pem -subj "/C=DE/ST=Hessen/L=Hattersheim/O=Hilscher/OU=Hilscher/CN=myown/emailAddress=myown@hilscher.com" \
+ && openssl x509 -req -in ./node-csr.pem -signkey ./node-key.pem -out ./node-cert.pem \
+# -------------------- Install standard nodes from the community --------------------------------------------------------------
+ && cd /root/.node-red/ \
+# -------------------- Install OPC UA nodes and all dependencies --------------------
+ && npm install node-red-contrib-opcua@0.2.64 \
+# -------------------- Install IBM Watson IoT nodes and all dependencies ------------
+ && npm install node-red-contrib-ibm-watson-iot@0.2.8 \
+# -------------------- Install Microsoft Azure IoT Hub nodes and all dependencies ---
+ && npm install node-red-contrib-azure-iot-hub@0.4.0 \
+# -------------------- Install influxdb node and all dependencies -------------------
+ && npm install node-red-contrib-influxdb@0.3.1 \
+# -------------------- Install MSSQL database node and all dependencies -------------
+ && npm install node-red-contrib-mssql-plus@0.4.4 \
+# -------------------- Install SMB file access node and all dependencies ------------
+ && npm install node-red-contrib-smb@1.1.1 \
+# -------------------- Install Modbus nodes and all dependencies --------------------
+ && npm install node-red-contrib-modbus@4.1.3 \
+# -------------------- Install Dashboard nodes and all dependencies -----------------
+ && npm install node-red-dashboard@2.22.1 \
+# -------------------- Install serial port node and all dependencies ----------------
+ && npm install node-red-node-serialport@0.8.6 \
+# -------------------- Install Bluetooth stack and all dependencies -----------------
+ && apt-get -y install libudev-dev \
+ && npm install node-red-contrib-generic-ble@4.0.2 \
+ && apt-get -y install dbus libglib2.0-dev \
+# -------------------- Install S7 communication nodes and all dependencies ----------
+ && npm install node-red-contrib-s7comm@1.1.6 \
+ && cd /root/.node-red/node_modules/node-red-contrib-s7comm/node_modules \
+ && npm install net-keepalive@1.2.1 \
+#clean up
+ && apt-get autoremove \
+ && apt-get clean \
+ && rm -rf /tmp/* \
+ && rm -rf /var/lib/apt/lists/*
+
+# -------------------- Do all necessary copies --------------------
+
+COPY "./auth/*" /root/.node-red/
+
+#copy files
+COPY "./init.d/*" /etc/init.d/
+
+#set the entrypoint
+WORKDIR "/etc/init.d/"
+ENTRYPOINT ["/etc/init.d/entrypoint.sh"]
+
+#Node-RED port
+EXPOSE 1880
+
+#set STOPSGINAL
+STOPSIGNAL SIGTERM
+
+#do periodic health check
+HEALTHCHECK --interval=5s --timeout=3s --start-period=120s --retries=1 \
+    CMD curl -k --silent --fail --head https://localhost:1880/ || exit 1
