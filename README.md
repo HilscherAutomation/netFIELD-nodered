@@ -82,6 +82,10 @@ A `docker-compose.yml` file could look like this
        volumes:
          - nodered:/root/.node-red
 
+    volumes:
+     nodered:
+
+
 ### Container access
 
 The container starts Node-RED and all involved services automatically when deployed.
